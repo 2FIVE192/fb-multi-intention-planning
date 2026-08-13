@@ -157,8 +157,8 @@ class GraphPlanner:
         """
         plan = self._plan
         cost_to_nodes = self.oracle.cost_from_state(observation, self.graph.targets)  # (K,)
-        # min по целевым состояниям — так же, как в solve_goal.
-        cost_direct = float(self.oracle.cost_from_state(observation, plan.goal_targets).min())
+        # Цель — один узел, поэтому просто первый (и единственный) элемент.
+        cost_direct = float(self.oracle.cost_from_state(observation, plan.goal_targets)[0])
 
         total = cost_to_nodes + plan.cost_to_goal
         admissible = (
@@ -241,7 +241,7 @@ class GraphPlanner:
         self._current_z = (
             self._plan.z_goal
             if node == graph_mod.DIRECT_TO_GOAL
-            else self.graph.targets.z[node]
+            else self.graph.targets.node_z[node]
         )
         self._subgoal_age = 0
 

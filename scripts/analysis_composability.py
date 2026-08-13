@@ -68,7 +68,7 @@ def main():
 
     # Привилегированные координаты — только здесь, только для оси абсцисс.
     grid, unit = maze_geometry(exp.env)
-    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.dataset_idxs][:, :2]
+    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.representative_idxs][:, :2]
     fields = all_geodesic_fields(grid)
 
     rng = np.random.default_rng(0)
