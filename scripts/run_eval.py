@@ -42,9 +42,15 @@ def parse_args():
     p.add_argument('--temperature', type=float, default=0.0, help='температура политик при оценке')
 
     g = p.add_argument_group('граф подцелей')
-    g.add_argument('--num_nodes', type=int, default=1000)
+    g.add_argument('--num_nodes', type=int, default=500)
     g.add_argument('--node_method', default='fps', choices=('fps', 'random'))
     g.add_argument('--k_neighbors', type=int, default=16)
+    g.add_argument('--num_members', type=int, default=16,
+                   help='состояний в наборе одного узла; успех метода упирается именно в это')
+    g.add_argument('--member_stride', type=int, default=4,
+                   help='шаг между членами набора; num_members * stride — охват окна в шагах')
+    g.add_argument('--normalizer_references', type=int, default=2000,
+                   help='опорных состояний для оценки знаменателя max_s M(s -> узел)')
     g.add_argument('--max_edge_steps', type=float, default=75.0,
                    help='максимальная длина ребра в шагах среды: FB надёжен только на коротких переходах')
     g.add_argument('--ensemble_reduce', default='min', choices=('min', 'mean'))
@@ -82,6 +88,9 @@ def build_controller(name, exp, args, run_seed):
             max_edge_steps=args.max_edge_steps,
             ensemble_reduce=args.ensemble_reduce,
             node_seed=node_seed,
+            num_members=args.num_members,
+            member_stride=args.member_stride,
+            normalizer_references=args.normalizer_references,
         )
         graph = exp.build_graph(spec, cache_dir=args.graph_cache_dir)
         config = PlannerConfig(
