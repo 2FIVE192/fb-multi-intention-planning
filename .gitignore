@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Результаты прогонов: сырые csv коммитим, тяжёлый кэш — нет.
+results/graph_cache/
+*.pkl
+
+# Чекпоинты сюда не кладём — они внешние.
+checkpoints/
+exp_logs/
+wandb/

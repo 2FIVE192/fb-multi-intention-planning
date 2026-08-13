@@ -1,0 +1,12 @@
+# Основной режим: Linux / Colab с GPU.
+# Версии jax/flax согласованы с upstream (switching-successor-measures).
+jax[cuda12]>=0.4.38
+flax>=0.10.2
+distrax>=0.1.5
+ml_collections>=1.1.0
+ogbench==1.1.4
+gymnasium>=0.29.1
+scipy>=1.11
+pandas>=2.0
+matplotlib>=3.8
+tqdm>=4.66

@@ -1,0 +1,3 @@
+[submodule "third_party/switching-successor-measures"]
+	path = third_party/switching-successor-measures
+	url = https://github.com/stestoKTH/switching-successor-measures.git
