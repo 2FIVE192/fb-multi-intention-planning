@@ -12,3 +12,4 @@ results/graph_cache/
 checkpoints/
 exp_logs/
 wandb/
+results/dummy_checkpoint/

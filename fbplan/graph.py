@@ -74,13 +74,16 @@ def build_subgoal_graph(
         k_neighbors: сколько ближайших исходящих рёбер оставить у каждого узла.
     """
     targets = oracle.make_targets(node_observations)
+    if dataset_idxs is None:
+        dataset_idxs = np.arange(len(targets))
+
+    targets, dataset_idxs = _drop_degenerate_nodes(targets, np.asarray(dataset_idxs))
+
     cost_matrix = oracle.cost(targets.observations, targets)  # (K, K)
+    # p(w -> w) = 1 по определению; численно оно может слегка отличаться.
     np.fill_diagonal(cost_matrix, 0.0)
 
     edges = _prune_edges(cost_matrix, max_edge_cost=max_edge_cost, k_neighbors=k_neighbors)
-
-    if dataset_idxs is None:
-        dataset_idxs = np.arange(len(targets))
 
     return SubgoalGraph(
         targets=targets,
@@ -89,6 +92,33 @@ def build_subgoal_graph(
         edges=edges,
         max_edge_cost=float(max_edge_cost),
     )
+
+
+def _drop_degenerate_nodes(targets: TargetSet, dataset_idxs: np.ndarray):
+    """Выбрасывает узлы с неположительной самомерой M(w -> w).
+
+    M(w -> w) стоит в знаменателе формулы p(s -> w) = M(s -> w) / M(w -> w).
+    Если он не строго положителен, нормировка теряет смысл, и такая вершина не
+    годится в подцели. У обученного FB это пик successor measure, так что доля
+    таких узлов должна быть близка к нулю — заметная доля означает, что с
+    представлением что-то не так, поэтому мы её печатаем, а не глушим.
+    """
+    valid = (targets.self_measure > 0.0).all(axis=0)  # строго во всех головах ансамбля
+    dropped = int((~valid).sum())
+
+    if dropped:
+        print(
+            f'[graph] отброшено узлов с M(w -> w) <= 0: {dropped} из {len(valid)} '
+            f'({dropped / len(valid):.1%})'
+        )
+    if not valid.any():
+        raise RuntimeError(
+            'Ни у одного узла нет положительной самомеры M(w -> w). '
+            'Похоже, чекпоинт не обучен или загрузился неверно.'
+        )
+
+    idxs = np.nonzero(valid)[0]
+    return targets.subset(idxs), dataset_idxs[idxs]
 
 
 def _prune_edges(cost_matrix: np.ndarray, max_edge_cost: float, k_neighbors: int) -> csr_matrix:
@@ -160,6 +190,13 @@ def solve_goal(
     """
     goal_observations = np.atleast_2d(np.asarray(goal_observations, dtype=np.float32))
     goal_targets = oracle.make_targets(goal_observations)
+
+    usable_goals = (goal_targets.self_measure > 0.0).all(axis=0)
+    if not usable_goals.any():
+        print('[graph] ВНИМАНИЕ: ни одно целевое состояние не имеет M(g -> g) > 0; '
+              'планировщик будет откатываться на поведение бейзлайна')
+    elif not usable_goals.all():
+        goal_targets = goal_targets.subset(np.nonzero(usable_goals)[0])
 
     # min по целевым состояниям: попасть в любое из них — значит решить задачу.
     direct_cost = oracle.cost(graph.targets.observations, goal_targets).min(axis=1)  # (K,)
