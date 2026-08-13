@@ -102,7 +102,7 @@ def test_dijkstra_recovers_true_distance():
     maze, oracle, graph = make_setup()
     plan = solve_goal(oracle, graph, np.array([GOAL_CELL], dtype=np.float32))
 
-    start_node = int(np.argmin(np.linalg.norm(graph.targets.observations - np.array(START_CELL), axis=1)))
+    start_node = int(np.argmin(np.linalg.norm(graph.targets.representatives - np.array(START_CELL), axis=1)))
     planned = float(plan.cost_to_goal[start_node])
     truth = oracle.true_cost(np.array(START_CELL), np.array(GOAL_CELL))
 
@@ -123,11 +123,11 @@ def test_extracted_path_goes_through_the_gap():
     maze, oracle, graph = make_setup()
     plan = solve_goal(oracle, graph, np.array([GOAL_CELL], dtype=np.float32))
 
-    start_node = int(np.argmin(np.linalg.norm(graph.targets.observations - np.array(START_CELL), axis=1)))
+    start_node = int(np.argmin(np.linalg.norm(graph.targets.representatives - np.array(START_CELL), axis=1)))
     path = extract_path(plan, start_node)
 
     assert len(path) > 1, f'маршрут из одной подцели: {path}'
-    cells = [tuple(c) for c in graph.targets.observations[path].round().astype(int)]
+    cells = [tuple(c) for c in graph.targets.representatives[path].round().astype(int)]
 
     # Рёбра перешагивают через несколько клеток, поэтому сама клетка проёма в
     # списке узлов может и не оказаться. Проверяем переход между половинами:
@@ -219,5 +219,8 @@ if __name__ == '__main__':
         except AssertionError as exc:
             failed += 1
             print(f'  FAIL {test.__name__}: {exc}')
+        except Exception as exc:  # noqa: BLE001 — падение теста тоже результат
+            failed += 1
+            print(f'  ERR  {test.__name__}: {type(exc).__name__}: {exc}')
     print(f'\n{len(tests) - failed}/{len(tests)} тестов прошло')
     sys.exit(1 if failed else 0)

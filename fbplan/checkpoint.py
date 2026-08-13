@@ -25,31 +25,41 @@ import numpy as np
 from agents.fbpiswitch import FBpiSwitchAgent, get_config as get_default_config
 
 
-def find_params_file(checkpoint_dir: str, restore_epoch: Optional[int] = None) -> Tuple[str, int]:
-    """Находит файл весов `params_{epoch}.pkl` в директории чекпоинта.
+def find_params_file(
+    checkpoint_dir: str, restore_epoch: Optional[int] = None
+) -> Tuple[str, Optional[int]]:
+    """Находит файл весов в директории чекпоинта.
 
-    Если `restore_epoch` не задан, берётся самая поздняя эпоха.
+    Поддерживаются оба варианта именования: `params_{epoch}.pkl`, как сохраняет
+    авторский `save_agent`, и просто `params.pkl` — так выложены официальные
+    чекпоинты. Если эпоха не указана, берётся самая поздняя из пронумерованных,
+    а при их отсутствии — единственный `params.pkl`.
     """
-    candidates = sorted(glob.glob(os.path.join(checkpoint_dir, 'params_*.pkl')))
-    if not candidates:
-        raise FileNotFoundError(
-            f'В {checkpoint_dir} нет файлов params_*.pkl. '
-            'Укажите директорию с чекпоинтом (в ней же должен лежать flags.json).'
-        )
-
-    epochs = {}
-    for path in candidates:
+    numbered = {}
+    for path in sorted(glob.glob(os.path.join(checkpoint_dir, 'params_*.pkl'))):
         match = re.search(r'params_(\d+)\.pkl$', os.path.basename(path))
         if match is not None:
-            epochs[int(match.group(1))] = path
+            numbered[int(match.group(1))] = path
 
-    if restore_epoch is None:
-        restore_epoch = max(epochs)
-    if restore_epoch not in epochs:
-        raise FileNotFoundError(
-            f'Нет эпохи {restore_epoch} в {checkpoint_dir}. Доступны: {sorted(epochs)}'
-        )
-    return epochs[restore_epoch], restore_epoch
+    if restore_epoch is not None:
+        if restore_epoch not in numbered:
+            raise FileNotFoundError(
+                f'Нет эпохи {restore_epoch} в {checkpoint_dir}. Доступны: {sorted(numbered)}'
+            )
+        return numbered[restore_epoch], restore_epoch
+
+    if numbered:
+        latest = max(numbered)
+        return numbered[latest], latest
+
+    plain = os.path.join(checkpoint_dir, 'params.pkl')
+    if os.path.exists(plain):
+        return plain, None
+
+    raise FileNotFoundError(
+        f'В {checkpoint_dir} нет ни params.pkl, ни params_*.pkl. '
+        'Укажите директорию с чекпоинтом (в ней же должен лежать flags.json).'
+    )
 
 
 def load_agent_config(checkpoint_dir: str) -> Dict[str, Any]:

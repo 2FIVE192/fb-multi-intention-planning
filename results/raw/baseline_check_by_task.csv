@@ -1,0 +1,11 @@
+method,task_id,success,std_over_seeds
+baseline,1,0.7,
+baseline,2,0.7,
+baseline,3,0.75,
+baseline,4,0.7,
+baseline,5,0.9,
+flat,1,0.75,
+flat,2,0.9,
+flat,3,0.7,
+flat,4,0.05,
+flat,5,0.85,

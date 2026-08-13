@@ -30,13 +30,22 @@ from .task_setup import TaskSpec, prepare_task
 class GraphSpec:
     """Параметры построения графа подцелей."""
 
-    num_nodes: int = 1000
+    num_nodes: int = 500
     node_method: str = 'fps'
     k_neighbors: int = 16
     max_edge_steps: float = 75.0
     ensemble_reduce: str = 'min'
     node_seed: int = 0
-    candidate_pool: int = 50_000
+    candidate_pool: int = 20_000
+    #: Сколько состояний в наборе одного узла и шаг между ними. Замер по
+    #: antmaze-medium: корреляция стоимости с истинным расстоянием растёт
+    #: 0.30 -> 0.46 -> 0.51 -> 0.53 при W = 1, 8, 16, 32, то есть после 16
+    #: отдача падает, а стоимость построения графа растёт линейно по W.
+    num_members: int = 16
+    member_stride: int = 4
+    #: Сколько состояний датасета брать опорными для оценки знаменателя
+    #: max_s M(s -> узел). Больше — устойчивее, но дороже.
+    normalizer_references: int = 2000
 
     def cache_key(self, checkpoint_dir: str, env_name: str) -> str:
         payload = json.dumps(
@@ -137,24 +146,42 @@ class Experiment:
                     return pickle.load(f)
 
         started = time.time()
-        node_idxs = select_nodes(
+        node_idxs = select_nodes(  # (K, W) индексы членов
             self.oracle,
             self.train_dataset['observations'],
+            self.train_dataset['terminals'],
             num_nodes=spec.num_nodes,
+            num_members=spec.num_members,
+            stride=spec.member_stride,
             method=spec.node_method,
             candidate_pool=spec.candidate_pool,
             seed=spec.node_seed,
         )
-        node_observations = np.asarray(
+        member_observations = np.asarray(
             self.train_dataset['observations'][node_idxs], dtype=np.float32
+        )
+
+        # Опорные состояния для знаменателя берём независимой случайной
+        # выборкой из датасета, а не самими узлами: узлы отобраны farthest point
+        # sampling, то есть смещены в сторону нетипичных состояний, и максимум
+        # по ним хуже оценивал бы M(w -> w).
+        rng = np.random.default_rng(spec.node_seed + 12345)
+        ref_idxs = rng.choice(
+            self.train_dataset.size,
+            size=min(spec.normalizer_references, self.train_dataset.size),
+            replace=False,
+        )
+        reference_observations = np.asarray(
+            self.train_dataset['observations'][ref_idxs], dtype=np.float32
         )
 
         graph = build_subgoal_graph(
             self.oracle,
-            node_observations,
+            member_observations,
             max_edge_cost=cost_from_steps(self.oracle, spec.max_edge_steps),
             k_neighbors=spec.k_neighbors,
             dataset_idxs=node_idxs,
+            reference_observations=reference_observations,
         )
         print(
             f'[exp] граф: {len(graph)} узлов, {graph.num_edges} рёбер, '

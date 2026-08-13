@@ -95,7 +95,7 @@ def main():
     query_obs, query_xy = representative_states(exp.train_dataset, args.grid_resolution)
     print(f'[E2] запросов по сетке: {len(query_obs)}')
 
-    direct_cost = exp.oracle.cost(query_obs, plan.goal_targets).min(axis=1)
+    direct_cost = exp.oracle.cost(query_obs, plan.goal_targets)[:, 0]
     planned_cost = _planned_cost(exp, graph, plan, query_obs)
 
     _plot_value_maps(args, exp, grid, unit, query_xy, direct_cost, planned_cost, task)
@@ -155,7 +155,7 @@ def _plot_value_maps(args, exp, grid, unit, xy, direct_cost, planned_cost, task)
 
 def _plot_graph_quality(args, exp, graph, grid, unit):
     """E5: сколько рёбер прошивает стены, и как они распределены по длине."""
-    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.dataset_idxs][:, :2]
+    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.representative_idxs][:, :2]
     coo = graph.edges.tocoo()
     bad = crosses_wall(grid, unit, node_xy[coo.row], node_xy[coo.col])
 
@@ -205,7 +205,7 @@ def _plot_graph_quality(args, exp, graph, grid, unit):
 
 def _plot_example_route(args, exp, graph, plan, grid, unit, task):
     """Пример последовательности подцелей от стартовой клетки задачи."""
-    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.dataset_idxs][:, :2]
+    node_xy = np.asarray(exp.train_dataset['qpos'])[graph.representative_idxs][:, :2]
     info = exp.env.unwrapped.task_infos[task.task_id - 1]
 
     start_node = int(np.argmin(np.linalg.norm(node_xy - np.asarray(info['init_xy']), axis=1)))

@@ -119,22 +119,34 @@ class SyntheticOracle:
     def backward(self, observations: np.ndarray) -> np.ndarray:
         return np.asarray(observations, dtype=np.float32)
 
-    def make_targets(self, observations: np.ndarray) -> TargetSet:
-        observations = np.atleast_2d(np.asarray(observations, dtype=np.float32))
+    def make_targets(self, member_observations: np.ndarray, reference_observations=None) -> TargetSet:
+        """Узел — набор состояний, как в настоящем оракуле.
+
+        В синтетике клетка лабиринта полностью задаёт состояние, поэтому набор
+        вырождается в одного члена: моделировать шум позы здесь нечем и незачем,
+        тесты проверяют логику планирования, а не качество представлений.
+        """
+        members = np.asarray(member_observations, dtype=np.float32)
+        if members.ndim == 2:
+            members = members[:, None, :]  # (K, 1, dim)
         return TargetSet(
-            observations=observations,
-            b=observations.copy(),
-            z=observations.copy(),
-            self_measure=np.ones((1, len(observations)), dtype=np.float32),
+            observations=members,
+            b=members.copy(),
+            z=members.copy(),
+            normalizer=np.ones(len(members), dtype=np.float32),
         )
 
     def cost(self, src_observations: np.ndarray, targets: TargetSet) -> np.ndarray:
         src = np.atleast_2d(np.asarray(src_observations, dtype=np.float32))
-        return np.stack([self._cost_row(s, targets.observations) for s in src], axis=0)
+        # Стоимость до набора — минимум по его членам (max по достижимости).
+        return np.stack(
+            [np.stack([self._cost_row(s, m) for m in targets.observations], axis=0).min(axis=1)
+             for s in src],
+            axis=0,
+        )
 
     def cost_from_state(self, observation: np.ndarray, targets: TargetSet) -> np.ndarray:
-        observation = np.asarray(observation, dtype=np.float32).reshape(-1)
-        return self._cost_row(observation, targets.observations)
+        return self.cost(np.asarray(observation, dtype=np.float32).reshape(1, -1), targets)[0]
 
     def steps_from_cost(self, cost: np.ndarray) -> np.ndarray:
         return cost / (-np.log(self.discount))

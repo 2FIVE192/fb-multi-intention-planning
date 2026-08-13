@@ -58,32 +58,43 @@ class SubgoalGraph:
     def num_edges(self) -> int:
         return int(self.edges.nnz)
 
+    @property
+    def representative_idxs(self) -> np.ndarray:
+        """(K,) индексы центральных членов в датасете — для скриптов анализа."""
+        return self.dataset_idxs[:, self.dataset_idxs.shape[1] // 2]
+
 
 def build_subgoal_graph(
     oracle: FBOracle,
-    node_observations: np.ndarray,
+    member_observations: np.ndarray,
     max_edge_cost: float,
     k_neighbors: int = 16,
     dataset_idxs: Optional[np.ndarray] = None,
+    reference_observations: Optional[np.ndarray] = None,
 ) -> SubgoalGraph:
     """Строит граф подцелей: K^2 запросов к F, затем прунинг рёбер.
 
     Args:
-        node_observations: (K, obs_dim) состояния-узлы.
+        member_observations: (K, W, obs_dim) состояния-члены узлов.
         max_edge_cost: рёбра дороже отбрасываются (см. `cost_from_steps`).
         k_neighbors: сколько ближайших исходящих рёбер оставить у каждого узла.
+        reference_observations: опорные состояния для оценки знаменателя
+            max_s M(s -> узел). См. `TargetSet`.
     """
-    targets = oracle.make_targets(node_observations)
+    targets = oracle.make_targets(member_observations, reference_observations)
     if dataset_idxs is None:
         dataset_idxs = np.arange(len(targets))
 
     targets, dataset_idxs = _drop_degenerate_nodes(targets, np.asarray(dataset_idxs))
 
-    cost_matrix = oracle.cost(targets.observations, targets)  # (K, K)
-    # p(w -> w) = 1 по определению; численно оно может слегка отличаться.
+    # Источник ребра — представитель узла: в развёртке агент тоже находится в
+    # одном конкретном состоянии, а не в наборе.
+    cost_matrix = oracle.cost(targets.representatives, targets)  # (K, K)
+    # p(узел -> он же) = 1 по определению; численно возможны отклонения.
     np.fill_diagonal(cost_matrix, 0.0)
 
     edges = _prune_edges(cost_matrix, max_edge_cost=max_edge_cost, k_neighbors=k_neighbors)
+    _warn_if_edges_degenerate(edges)
 
     return SubgoalGraph(
         targets=targets,
@@ -92,6 +103,38 @@ def build_subgoal_graph(
         edges=edges,
         max_edge_cost=float(max_edge_cost),
     )
+
+
+#: Доля рёбер нулевого веса, выше которой граф считается вырожденным.
+DEGENERATE_EDGE_WARN = 0.5
+
+
+def _warn_if_edges_degenerate(edges: csr_matrix) -> None:
+    """Кричит, если у графа почти нет веса.
+
+    Ошибка, ради которой это написано, стоила прогона: знаменатель в p(s -> w)
+    брался как сырое M(w -> w), отношение для близких пар превышало единицу,
+    клип обнулял стоимость — а top-k отбирает именно САМЫЕ ДЕШЁВЫЕ рёбра, то
+    есть ровно вырожденные. В итоге 99.6% рёбер имели вес 0, Дейкстра давала
+    нулевую стоимость до цели отовсюду, и планировщик выбирал подцели случайно.
+    Снаружи это выглядело просто как «метод хуже бейзлайна».
+    """
+    weights = edges.tocoo().data
+    if len(weights) == 0:
+        # Не ошибка: планировщик умеет откатываться на поведение бейзлайна.
+        # Но молчать об этом нельзя — обычно это признак слишком жёсткого порога.
+        print('[graph] ВНИМАНИЕ: граф остался без рёбер, ослабьте max_edge_cost. '
+              'Планировщик будет работать как бейзлайн.')
+        return
+
+    zero_fraction = float((weights <= 1e-9).mean())
+    if zero_fraction > DEGENERATE_EDGE_WARN:
+        print(
+            f'[graph] ВНИМАНИЕ: {zero_fraction:.1%} рёбер имеют нулевой вес. '
+            'Оценка p(s -> w) насыщена, кратчайшие пути будут бессмысленны. '
+            'Проверьте, что знаменатель считается через max_s M(s -> w) '
+            '(аргумент reference_observations).'
+        )
 
 
 def _drop_degenerate_nodes(targets: TargetSet, dataset_idxs: np.ndarray):
@@ -103,17 +146,17 @@ def _drop_degenerate_nodes(targets: TargetSet, dataset_idxs: np.ndarray):
     таких узлов должна быть близка к нулю — заметная доля означает, что с
     представлением что-то не так, поэтому мы её печатаем, а не глушим.
     """
-    valid = (targets.self_measure > 0.0).all(axis=0)  # строго во всех головах ансамбля
+    valid = targets.normalizer > 0.0
     dropped = int((~valid).sum())
 
     if dropped:
         print(
-            f'[graph] отброшено узлов с M(w -> w) <= 0: {dropped} из {len(valid)} '
-            f'({dropped / len(valid):.1%})'
+            f'[graph] отброшено узлов с непригодным знаменателем: {dropped} из '
+            f'{len(valid)} ({dropped / len(valid):.1%})'
         )
     if not valid.any():
         raise RuntimeError(
-            'Ни у одного узла нет положительной самомеры M(w -> w). '
+            'Ни у одного узла нет положительного знаменателя max_s M(s -> w). '
             'Похоже, чекпоинт не обучен или загрузился неверно.'
         )
 
@@ -188,24 +231,27 @@ def solve_goal(
     транспонированному графу от цели — так за один вызов получаем расстояния
     «до цели» сразу для всех узлов.
     """
+    # Цель — это ОДИН узел, членами которого служат целевые состояния датасета.
+    # Ровно тот же набор, по которому авторский `infer_latent` усредняет B.
     goal_observations = np.atleast_2d(np.asarray(goal_observations, dtype=np.float32))
-    goal_targets = oracle.make_targets(goal_observations)
+    # Явная форма (1, M, obs): один узел, членами которого служат все целевые
+    # состояния. Знаменатель оцениваем по представителям узлов графа — они
+    # покрывают лабиринт.
+    goal_targets = oracle.make_targets(
+        goal_observations[None], graph.targets.representatives
+    )
 
-    usable_goals = (goal_targets.self_measure > 0.0).all(axis=0)
-    if not usable_goals.any():
-        print('[graph] ВНИМАНИЕ: ни одно целевое состояние не имеет M(g -> g) > 0; '
+    if goal_targets.normalizer[0] <= 0.0:
+        print('[graph] ВНИМАНИЕ: у целевого узла непригодный знаменатель; '
               'планировщик будет откатываться на поведение бейзлайна')
-    elif not usable_goals.all():
-        goal_targets = goal_targets.subset(np.nonzero(usable_goals)[0])
 
-    # min по целевым состояниям: попасть в любое из них — значит решить задачу.
-    direct_cost = oracle.cost(graph.targets.observations, goal_targets).min(axis=1)  # (K,)
+    direct_cost = oracle.cost(graph.targets.representatives, goal_targets)[:, 0]  # (K,)
 
     # По умолчанию z_r — среднее B по целевым состояниям (то же, что даёт
     # `infer_latent`). Скрипты оценки передают сюда латент бейзлайна явно,
     # чтобы «прямой бросок в цель» был у обоих методов побитово одинаковым.
     if z_goal is None:
-        z_goal = oracle.normalize_z(goal_targets.b.mean(axis=0))
+        z_goal = oracle.normalize_z(goal_targets.b[0].mean(axis=0))
     else:
         z_goal = oracle.normalize_z(z_goal)
 

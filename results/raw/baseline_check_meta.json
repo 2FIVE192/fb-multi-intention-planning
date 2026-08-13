@@ -1,0 +1,32 @@
+{
+  "env_name": "ogbench-antmaze-medium-navigate-v0",
+  "checkpoint_dir": "D:\\T-Lab\\fb-multi-intention-planning\\checkpoints\\medium",
+  "latent_dim": 128,
+  "discount": 0.99,
+  "ensemble_reduce": "min",
+  "train_size": 1000000,
+  "obs_dim": 29,
+  "args": {
+    "checkpoint_dir": "checkpoints/medium",
+    "env_name": "ogbench-antmaze-medium-navigate-v0",
+    "methods": "baseline,flat",
+    "seeds": "0",
+    "num_episodes": 20,
+    "temperature": 0.0,
+    "num_nodes": 1000,
+    "node_method": "fps",
+    "k_neighbors": 16,
+    "max_edge_steps": 75.0,
+    "ensemble_reduce": "min",
+    "node_seed": 0,
+    "replan_every": 10,
+    "reach_steps": 20.0,
+    "max_subgoal_steps": 120,
+    "switch_margin_steps": 5.0,
+    "execution": "low",
+    "output_dir": "results/raw",
+    "tag": "baseline_check",
+    "graph_cache_dir": "results/graph_cache",
+    "no_progress": true
+  }
+}
