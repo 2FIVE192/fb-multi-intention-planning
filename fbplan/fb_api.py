@@ -336,21 +336,34 @@ class FBOracle:
     # ------------------------------------------------------------------ #
 
     def low_action(self, observation: np.ndarray, z: np.ndarray, seed, temperature: float = 0.0):
-        """Действие pi_l(a | s, z). `z` нормируется здесь же."""
+        """Действие pi_l(a | s, z). `z` нормируется и приводится к форме здесь же."""
+        observation = np.atleast_2d(np.asarray(observation, dtype=np.float32))
+        z = self._match_batch(z, len(observation))
         return np.asarray(
-            _sample_low_action(self.network, observation, self.normalize_z(z), seed, temperature)
+            _sample_low_action(self.network, observation, z, seed, temperature)
         )
 
     def high_intent(
         self, observation: np.ndarray, z_reward: np.ndarray, seed, temperature: float = 0.0
     ) -> np.ndarray:
         """Интенция pi_h(z_w | s, z_r) бейзлайна, уже нормированная."""
+        observation = np.atleast_2d(np.asarray(observation, dtype=np.float32))
+        z_reward = self._match_batch(z_reward, len(observation))
         raw = np.asarray(
-            _sample_high_intent(
-                self.network, observation, self.normalize_z(z_reward), seed, temperature
-            )
+            _sample_high_intent(self.network, observation, z_reward, seed, temperature)
         )
         return self.normalize_z(raw)
+
+    def _match_batch(self, z: np.ndarray, batch_size: int) -> np.ndarray:
+        """Нормирует латент и разворачивает его до (batch_size, d).
+
+        Латент приходит и одномерным (одна интенция узла), и уже батчем;
+        сети же требуют, чтобы форма совпадала с наблюдениями.
+        """
+        z = self.normalize_z(np.asarray(z, dtype=np.float32).reshape(-1, self.latent_dim))
+        if len(z) == batch_size:
+            return z
+        return np.ascontiguousarray(np.broadcast_to(z, (batch_size, self.latent_dim)))
 
     # ------------------------------------------------------------------ #
     # Внутреннее
@@ -379,10 +392,10 @@ class FBOracle:
             z_block = _pad_to(flat_z[columns], nodes_per_chunk * width)
             b_block = _pad_to(flat_b[columns], nodes_per_chunk * width)
 
-            for source_chunk in self._iter_chunks(src_observations, self.src_chunk):
+            for source_chunk in self._iter_chunks(src_observations, self.src_chunk, pad=False):
                 measures = np.asarray(
                     _pairwise_min_measures(self.network, source_chunk.data, z_block, b_block)
-                )[: source_chunk.size, : node_chunk.size * width]
+                )[:, : node_chunk.size * width]
 
                 i0 = source_chunk.start
                 out[i0 : i0 + source_chunk.size, j0:j1] = measures.reshape(
@@ -391,15 +404,22 @@ class FBOracle:
 
         return out
 
-    def _iter_chunks(self, array: np.ndarray, chunk: int):
-        """Блоки фиксированного размера с паддингом.
+    def _iter_chunks(self, array: np.ndarray, chunk: int, pad: bool = True):
+        """Разбивает массив на блоки.
 
-        Размер фиксирован намеренно: иначе jax перекомпилирует ядро на каждом
-        хвостовом блоке другой формы.
+        `pad=True` (цели) выравнивает блок до фиксированного размера, чтобы jax
+        не перекомпилировал ядро на каждом хвостовом блоке другой формы.
+
+        `pad=False` (источники) выравнивания НЕ делает, и это важно: онлайн-цикл
+        планировщика спрашивает стоимость ровно из одного состояния, а паддинг
+        раздувал бы такой запрос до полного блока в сотни строк. Разных размеров
+        блока источников на практике два-три, так что лишние компиляции jax
+        обходятся куда дешевле постоянного перерасхода.
         """
         for start in range(0, len(array), chunk):
             size = min(chunk, len(array) - start)
-            yield _Chunk(start=start, size=size, data=_pad_to(array[start : start + size], chunk))
+            data = array[start : start + size]
+            yield _Chunk(start=start, size=size, data=_pad_to(data, chunk) if pad else data)
 
 
 @dataclasses.dataclass(frozen=True)
