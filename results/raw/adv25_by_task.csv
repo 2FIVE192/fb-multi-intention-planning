@@ -1,0 +1,6 @@
+method,task_id,success,std_over_seeds
+graph,1,0.7,
+graph,2,0.65,
+graph,3,0.9,
+graph,4,0.55,
+graph,5,0.9,
