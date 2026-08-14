@@ -1,0 +1,3 @@
+method,success,std_over_seeds,ci_low,ci_high,num_seeds,num_episodes
+baseline,0.7966666666666665,0.05859465277082314,0.73,0.84,3,300
+graph,0.73,0.06928203230275509,0.65,0.77,3,300

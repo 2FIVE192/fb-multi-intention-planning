@@ -1,0 +1,11 @@
+{
+  "method_a": "graph",
+  "method_b": "baseline",
+  "delta": -0.06666666666666667,
+  "ci_low": -0.08,
+  "ci_high": -0.05000000000000001,
+  "num_pairs": 300,
+  "frac_disagree": 0.36666666666666664,
+  "wins_a": 45,
+  "wins_b": 65
+}
