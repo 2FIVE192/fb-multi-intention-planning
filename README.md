@@ -81,7 +81,7 @@ c(s → w) := −log p(s → w)   —   аддитивна.
 ## Установка
 
 ```bash
-git clone --recursive <url этого репозитория>
+git clone --recursive https://github.com/2FIVE192/fb-multi-intention-planning.git
 cd fb-multi-intention-planning
 ```
 
