@@ -62,7 +62,16 @@ def parse_args():
     c.add_argument('--reach_steps', type=float, default=20.0)
     c.add_argument('--max_subgoal_steps', type=int, default=120)
     c.add_argument('--switch_margin_steps', type=float, default=5.0)
-    c.add_argument('--execution', default='low', choices=('low', 'high'))
+    c.add_argument('--plan_advantage_steps', type=float, default=0.0,
+                   help='насколько маршрут по графу должен быть дешевле прямого броска, '
+                        'чтобы его предпочли: оценка до цели надёжнее оценки до узла')
+    c.add_argument('--min_commit_steps', type=int, default=40,
+                   help='минимальное удержание подцели; защита от дребезга выбора')
+    c.add_argument('--tail_estimate', default='dijkstra', choices=('dijkstra', 'direct'),
+                   help="чем оценивать хвост до цели: 'dijkstra' — многошаговая "
+                        "композиция, 'direct' — план ровно из одной подцели")
+    c.add_argument('--execution', default='high', choices=('low', 'high'),
+                   help="'high' — подцель идёт через замороженный pi_h, как у бейзлайна")
 
     o = p.add_argument_group('вывод')
     o.add_argument('--output_dir', default='results/raw')
@@ -98,6 +107,9 @@ def build_controller(name, exp, args, run_seed):
             reach_steps=args.reach_steps,
             max_subgoal_steps=args.max_subgoal_steps,
             switch_margin_steps=args.switch_margin_steps,
+            min_commit_steps=args.min_commit_steps,
+            plan_advantage_steps=args.plan_advantage_steps,
+            tail_estimate=args.tail_estimate,
             execution=args.execution,
             temperature=args.temperature,
         )

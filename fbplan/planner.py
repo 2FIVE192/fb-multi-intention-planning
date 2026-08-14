@@ -44,9 +44,30 @@ class PlannerConfig:
         switch_margin_steps: гистерезис. Менять подцель на новую, только если
             она лучше текущей более чем на столько шагов. Без него выбор
             дребезжит между двумя соседними узлами.
+        plan_advantage_steps: насколько маршрут по графу должен быть ДЕШЕВЛЕ
+            прямого броска, чтобы его вообще предпочли.
+
+            Это не гиперпараметр «на вкус», а следствие замеров. Оценка до цели
+            задачи коррелирует с истинным расстоянием на 0.75, а до произвольного
+            узла — на 0.18. Сравнивать их на равных значит регулярно менять
+            надёжное число на шумное; замер по задачам показал именно это —
+            планировщик рушился там, где обход не нужен (0.15 против 0.70 у
+            бейзлайна), и держался там, где нужен. Порог требует положительных
+            свидетельств в пользу композиции, а не просто численного перевеса.
         execution: 'low' — интенция подцели идёт прямо в pi_l;
             'high' — сначала через замороженный pi_h (тогда наш планировщик
             отвечает за дальний горизонт, а бейзлайн-контроллер за локальный).
+        tail_estimate: чем оценивать «хвост» маршрута от подцели до цели.
+            'dijkstra' — кратчайший путь по графу, то есть настоящая многошаговая
+            композиция; 'direct' — один запрос FB `c(w -> цель)`, то есть план
+            ровно из ОДНОЙ промежуточной подцели.
+
+            Это ключевая абляция всей работы. Замеры показали, что запрос к цели
+            задачи информативен (корреляция с истинным расстоянием 0.75), а
+            попарные рёбра между произвольными состояниями — почти нет (0.18).
+            Обе ветки используют граф для локальной достижимости одинаково и
+            расходятся только в оценке хвоста, поэтому разница между ними — и
+            есть чистый вклад многошаговой композиции.
         temperature: температура сэмплирования политик (0 — детерминированно).
     """
 
@@ -55,12 +76,18 @@ class PlannerConfig:
     max_subgoal_steps: int = 120
     min_commit_steps: int = 40
     switch_margin_steps: float = 5.0
+    plan_advantage_steps: float = 0.0
     execution: str = 'high'
+    tail_estimate: str = 'dijkstra'
     temperature: float = 0.0
 
     def __post_init__(self):
         if self.execution not in ('low', 'high'):
             raise ValueError(f"execution должен быть 'low' или 'high', получено {self.execution!r}")
+        if self.tail_estimate not in ('dijkstra', 'direct'):
+            raise ValueError(
+                f"tail_estimate должен быть 'dijkstra' или 'direct', получено {self.tail_estimate!r}"
+            )
 
 
 class GraphPlanner:
@@ -75,6 +102,7 @@ class GraphPlanner:
 
         self.reach_cost = graph_mod.cost_from_steps(oracle, config.reach_steps)
         self.switch_margin = graph_mod.cost_from_steps(oracle, config.switch_margin_steps)
+        self.plan_advantage = graph_mod.cost_from_steps(oracle, config.plan_advantage_steps)
 
         self._plan: Optional[GoalPlan] = None
         self._cached_task_id: Optional[int] = None
@@ -95,6 +123,17 @@ class GraphPlanner:
             )
             self._cached_task_id = task.task_id
         self._reset_episode_state()
+
+    @property
+    def _tail_cost(self) -> np.ndarray:
+        """(K,) оценка стоимости от каждого узла до цели — «хвост» маршрута.
+
+        Единственное место, где расходятся многошаговая композиция и план из
+        одной подцели. См. `PlannerConfig.tail_estimate`.
+        """
+        if self.config.tail_estimate == 'dijkstra':
+            return self._plan.cost_to_goal
+        return self._plan.direct_cost
 
     def _reset_episode_state(self) -> None:
         self._step = 0
@@ -166,7 +205,8 @@ class GraphPlanner:
         # Цель — один узел, поэтому просто первый (и единственный) элемент.
         cost_direct = float(self.oracle.cost_from_state(observation, plan.goal_targets)[0])
 
-        total = cost_to_nodes + plan.cost_to_goal
+        tail = self._tail_cost
+        total = cost_to_nodes + tail
         admissible = (
             (cost_to_nodes <= self.graph.max_edge_cost)
             & np.isfinite(total)
@@ -185,8 +225,13 @@ class GraphPlanner:
         best_cost = cost_direct if direct_trusted else np.inf
 
         if admissible.any():
-            node = self._argmin_with_tiebreak(total, admissible, plan.cost_to_goal)
-            if total[node] < best_cost:
+            node = self._argmin_with_tiebreak(total, admissible, tail)
+            # Маршрут по графу должен ПЕРЕБИТЬ прямой бросок с запасом: его
+            # стоимость собрана из куда менее надёжных оценок (см.
+            # `plan_advantage_steps`). Против бесконечности запас не нужен —
+            # там прямого варианта попросту нет.
+            required = best_cost - (self.plan_advantage if np.isfinite(best_cost) else 0.0)
+            if total[node] < required:
                 best_node, best_cost = node, float(total[node])
 
         if best_node is None:
@@ -233,7 +278,11 @@ class GraphPlanner:
 
         reached = current_cost <= self.reach_cost
         stale = self._subgoal_age >= self.config.max_subgoal_steps
-        clearly_better = best_cost + self.switch_margin < current_total
+        # Пересмотр «по выгоде» разрешён только после минимального удержания:
+        # оценки FB шумят на единицы шагов, и без этого условия подцель
+        # переписывалась на каждом перепланировании, не давая муравью набрать ход.
+        committed = self._subgoal_age < self.config.min_commit_steps
+        clearly_better = (not committed) and best_cost + self.switch_margin < current_total
 
         if reached or stale or clearly_better:
             if best_node != self._current_node:
@@ -268,4 +317,4 @@ class GraphPlanner:
         """
         if self._current_node == graph_mod.DIRECT_TO_GOAL:
             return cost_direct if direct_trusted else np.inf
-        return float(cost_to_nodes[self._current_node] + self._plan.cost_to_goal[self._current_node])
+        return float(cost_to_nodes[self._current_node] + self._tail_cost[self._current_node])
