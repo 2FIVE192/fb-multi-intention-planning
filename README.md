@@ -113,6 +113,18 @@ python scripts/download_datasets.py --datasets antmaze-medium-navigate-v0
 (`PermissionError: [WinError 32]`), потому что переименовывает временный файл, не
 закрыв его. На Linux/Colab можно пользоваться и обычным `ogbench`.
 
+**На машине без дисплея** (сервер, Colab) MuJoCo нужен headless-контекст: OGBench
+создаёт `mujoco.Renderer` прямо в `MazeEnv.__init__`, поэтому без него среда не
+поднимается вообще — даже когда рендер не нужен. Иначе прогон падает с
+`mujoco.FatalError: an OpenGL platform library has not been loaded`. Репозиторий
+подставляет `MUJOCO_GL=egl` сам (`fbplan/_upstream.py`), если переменная не
+задана и дисплея нет. Если EGL в образе отсутствует, помогает программный
+рендер:
+
+```bash
+MUJOCO_GL=osmesa python scripts/run_eval.py ...
+```
+
 ## Чекпоинты
 
 Официальные чекпоинты лежат на Google Drive и качаются так:
