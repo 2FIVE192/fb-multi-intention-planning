@@ -21,21 +21,16 @@ import sys
 NOTEBOOK_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'notebooks')
 
 
-def to_python(source: str) -> str:
-    """Превращает содержимое ячейки в компилируемый Python.
+def strip_magics(source: str) -> str:
+    """Заменяет строки с магией IPython на `pass` с тем же отступом.
 
-    Если IPython доступен, используется его штатный трансформер. Иначе строки с
-    магией заменяются на `pass` с тем же отступом — именно заменяются, а не
-    выбрасываются: `!команда` бывает телом цикла или `if`, и удаление строки
-    оставило бы пустой блок и ложную синтаксическую ошибку.
+    Заменяет, а не выбрасывает: `!команда` бывает телом цикла или `if`, и
+    удаление строки оставило бы пустой блок.
+
+    Приблизительность здесь неизбежна — замена не отличает настоящую магию от
+    строки текста, которая просто начинается с `!` внутри литерала. Поэтому
+    вызывать её нужно только как запасной вариант, см. `compiles`.
     """
-    try:
-        from IPython.core.inputtransformer2 import TransformerManager
-    except ImportError:
-        pass
-    else:
-        return TransformerManager().transform_cell(source)
-
     lines = []
     for line in source.splitlines():
         stripped = line.lstrip()
@@ -44,6 +39,39 @@ def to_python(source: str) -> str:
         else:
             lines.append(line)
     return '\n'.join(lines)
+
+
+def compiles(source: str, name: str):
+    """Проверяет компилируемость ячейки. Возвращает SyntaxError или None.
+
+    Сначала пробуем исходник как есть: подавляющее большинство ячеек — обычный
+    Python, и для них это точная проверка. Замена магии применяется только если
+    исходник не скомпилировался, потому что она сама может сломать корректный
+    код — например, снести закрывающие кавычки у многострочного текста, внутри
+    которого есть строка, начинающаяся с `!`. Ровно на этом проверка один раз
+    уже дала ложную тревогу.
+
+    Если IPython доступен, используется его штатный трансформер: он разбирает
+    ячейку по-настоящему и таких промахов не допускает.
+    """
+    try:
+        compile(source, name, 'exec')
+        return None
+    except SyntaxError:
+        pass
+
+    try:
+        from IPython.core.inputtransformer2 import TransformerManager
+    except ImportError:
+        transformed = strip_magics(source)
+    else:
+        transformed = TransformerManager().transform_cell(source)
+
+    try:
+        compile(transformed, name, 'exec')
+        return None
+    except SyntaxError as exc:
+        return exc
 
 
 def check_notebook(path: str) -> list:
@@ -58,9 +86,8 @@ def check_notebook(path: str) -> list:
         source = ''.join(cell['source'])
         if not source.strip():
             continue
-        try:
-            compile(to_python(source), f'{os.path.basename(path)}:cell{index}', 'exec')
-        except SyntaxError as exc:
+        exc = compiles(source, f'{os.path.basename(path)}:cell{index}')
+        if exc is not None:
             errors.append((index, f'{exc.msg} (строка {exc.lineno}: {(exc.text or "").strip()})'))
     return errors
 
