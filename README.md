@@ -113,16 +113,26 @@ python scripts/download_datasets.py --datasets antmaze-medium-navigate-v0
 (`PermissionError: [WinError 32]`), потому что переименовывает временный файл, не
 закрыв его. На Linux/Colab можно пользоваться и обычным `ogbench`.
 
-**На машине без дисплея** (сервер, Colab) MuJoCo нужен headless-контекст: OGBench
-создаёт `mujoco.Renderer` прямо в `MazeEnv.__init__`, поэтому без него среда не
-поднимается вообще — даже когда рендер не нужен. Иначе прогон падает с
-`mujoco.FatalError: an OpenGL platform library has not been loaded`. Репозиторий
-подставляет `MUJOCO_GL=egl` сам (`fbplan/_upstream.py`), если переменная не
-задана и дисплея нет. Если EGL в образе отсутствует, помогает программный
-рендер:
+**На машине без дисплея** (сервер, Colab) OGBench безусловно создаёт
+`mujoco.Renderer` прямо в `MazeEnv.__init__` и сразу рендерит кадр, то есть
+требует рабочего OpenGL даже когда картинки не нужны. На Colab это давало
+`SIGSEGV` прямо в `mujoco.MjrContext` — и на `egl`, и на `osmesa`, причём
+воспроизводилось только когда до создания среды успевал загрузиться jaxlib с
+CUDA. Подбор backend'а такую поломку не лечит: конфликтуют сами нативные
+библиотеки.
+
+Поэтому на headless-Linux `fbplan/_upstream.py` подменяет рендерер заглушкой.
+Кадры нигде не используются (`render_goal=False` передаётся везде, результат
+`env.render()` не читается), так что источник падения убирается целиком.
+Заглушка не ставится, если есть `DISPLAY` или задано `FBPLAN_KEEP_RENDERER=1` —
+последнее нужно, только если вам действительно нужны картинки, и тогда backend
+придётся подбирать самому (`MUJOCO_GL=egl` или `osmesa`).
+
+Что где ломается, показывает диагностика — пять проб, отличающихся одним шагом,
+каждая отдельным процессом с faulthandler:
 
 ```bash
-MUJOCO_GL=osmesa python scripts/run_eval.py ...
+python scripts/diagnose_env.py
 ```
 
 ## Чекпоинты
