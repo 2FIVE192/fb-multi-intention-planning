@@ -172,10 +172,11 @@ python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph -
 python scripts/trace_episode.py --checkpoint_dir checkpoints/medium --task_id 1
 ```
 
-**Тесты логики планирования** (чекпоинт не нужен, секунды):
+**Тесты** — логика планирования и синтаксис ячеек ноутбуков (чекпоинт не нужен, секунды):
 
 ```bash
 python tests/test_planning.py
+python tests/test_notebooks.py
 ```
 
 Скрипты `analysis_composability.py` и `analysis_value_maps.py` строят графики
