@@ -75,6 +75,7 @@ class Experiment:
         env_name: str,
         ensemble_reduce: str = 'min',
         disagreement_penalty: float = 0.0,
+        tgt_chunk: int = 128,
         seed: int = 0,
     ):
         print(f'[exp] среда {env_name}')
@@ -93,7 +94,7 @@ class Experiment:
         self.checkpoint_dir = checkpoint_dir
 
         self.oracle = FBOracle(self.agent, self.config, ensemble_reduce=ensemble_reduce,
-                               disagreement_penalty=disagreement_penalty)
+                               disagreement_penalty=disagreement_penalty, tgt_chunk=tgt_chunk)
 
         self._tasks: Optional[List[TaskSpec]] = None
 

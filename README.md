@@ -198,6 +198,29 @@ python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods baselin
 python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph --seeds 0 --num_episodes 20 --num_nodes 300 --num_members 8 --member_stride 8 --normalizer_references 1000 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate dijkstra --tag tail_dijkstra
 ```
 
+### Недостающая ветка абляции на полной конфигурации
+
+На GPU не досчиталась ветка `direct` при 1000 узлах и 32 членах — кончилась
+квота. Без неё сравнение в разделе 5.9 отличается двумя параметрами, а не одним
+(чистая версия того же сравнения есть на CPU и лежит в
+`results/raw/commit_*_episodes.csv`).
+
+Замеренная стоимость по логам прогона: **102 минуты** на три сида, из них 200 с
+на построение графа, остальное — развёртки. Сравнивать результат нужно с уже
+полученным `gpu_tail_dijkstra` = 0.430, поэтому сиды и число эпизодов обязаны
+совпадать.
+
+```bash
+python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph --seeds 1,2,3 --num_episodes 20 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate direct --num_nodes 1000 --num_members 32 --member_stride 2 --normalizer_references 4000 --tgt_chunk 2048 --tag gpu_tail_direct
+```
+
+Флаг `--tgt_chunk 2048` здесь не косметика. При наборах по 32 члена блок по
+умолчанию вмещает `128/32 = 4` узла, то есть один онлайн-запрос дробится на 250
+запусков ядра. Укрупнение блока ускорило запрос втрое на замере (193 → 68 мс), а
+решения не изменились: расхождение 5e-07 от округления float32, `argmin`
+совпадает в 100% случаев. Ожидаемое время — порядка 40 минут вместо 102, но это
+экстраполяция замера с CPU, а не проверка на самом GPU.
+
 ### Диагностика и тесты
 
 ```bash

@@ -54,6 +54,11 @@ def parse_args():
     g.add_argument('--max_edge_steps', type=float, default=75.0,
                    help='максимальная длина ребра в шагах среды: FB надёжен только на коротких переходах')
     g.add_argument('--ensemble_reduce', default='min', choices=('min', 'mean'))
+    g.add_argument('--tgt_chunk', type=int, default=128,
+                   help='ширина блока целей в запросе к F. Влияет только на скорость: '
+                        'при узлах-наборах блок вмещает tgt_chunk/num_members узлов, и '
+                        'при 128/32 онлайн-запрос дробится на 250 запусков ядра. '
+                        'На GPU осмысленно 1024-2048')
     g.add_argument('--disagreement_penalty', type=float, default=0.0,
                    help='штраф за расхождение голов ансамбля; проверен и не помог, '
                         'см. REPORT 5.11')
@@ -137,6 +142,7 @@ def main():
         args.env_name,
         ensemble_reduce=args.ensemble_reduce,
         disagreement_penalty=args.disagreement_penalty,
+        tgt_chunk=args.tgt_chunk,
         seed=seeds[0],
     )
     tasks = exp.tasks()
