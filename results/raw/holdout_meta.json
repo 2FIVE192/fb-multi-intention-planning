@@ -4,6 +4,7 @@
   "latent_dim": 128,
   "discount": 0.99,
   "ensemble_reduce": "min",
+  "disagreement_penalty": 0.0,
   "train_size": 1000000,
   "obs_dim": 29,
   "args": {
@@ -21,6 +22,8 @@
     "normalizer_references": 1000,
     "max_edge_steps": 75.0,
     "ensemble_reduce": "min",
+    "tgt_chunk": 128,
+    "disagreement_penalty": 0.0,
     "node_seed": 0,
     "replan_every": 20,
     "reach_steps": 20.0,

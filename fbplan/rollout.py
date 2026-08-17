@@ -27,6 +27,29 @@ def episode_seed(run_seed: int, task_id: int, episode: int) -> int:
     return int((run_seed * 1_000_003 + task_id * 10_007 + episode) % (2**31 - 1))
 
 
+def reset_episode(env: Any, seed: int, task_id: int):
+    """Сброс среды с ПОЛНОСТЬЮ воспроизводимым стартовым состоянием.
+
+    Одного `env.reset(seed=...)` для этого не хватает, и это не наша ошибка, а
+    поведение OGBench. `MazeEnv.reset` берёт случайность из двух источников, до
+    которых аргумент `seed` не достаёт:
+
+    * `add_noise` сдвигает стартовую позицию через `np.random.uniform`, то есть
+      через ГЛОБАЛЬНЫЙ генератор numpy;
+    * затем делается пять стабилизирующих шагов `action_space.sample()`, а
+      `reset(seed=...)` в gymnasium засеивает `env.np_random`, но не генератор
+      пространства действий.
+
+    Замер до исправления: два подряд `reset` с одним и тем же сидом давали
+    наблюдения, различающиеся на 0.53, а два одинаковых прогона бейзлайна
+    расходились в 8 эпизодах из 25. Спаренность эпизодов, на которой держится
+    сравнение методов, при этом была фиктивной.
+    """
+    np.random.seed(seed)
+    env.action_space.seed(seed)
+    return env.reset(seed=seed, options=dict(task_id=task_id, render_goal=False))
+
+
 def rollout_task(
     controller: Any,
     env: Any,
@@ -48,9 +71,8 @@ def rollout_task(
         # подцель, счётчики). DP внутри кэшируется по task_id и не пересчитывается.
         controller.reset(task)
 
-        observation, info = env.reset(
-            seed=episode_seed(run_seed, task.task_id, episode),
-            options=dict(task_id=task.task_id, render_goal=False),
+        observation, info = reset_episode(
+            env, episode_seed(run_seed, task.task_id, episode), task.task_id
         )
 
         done, step, last_info = False, 0, {}
