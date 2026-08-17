@@ -73,6 +73,21 @@ def _backward_repr(network, observations):
 
 
 @jax.jit
+def _pairwise_measures_per_head(network, src_observations, tgt_z, tgt_b):
+    """То же, что `_pairwise_min_measures`, но БЕЗ сведения ансамбля. -> (E, S, T)
+
+    Нужно для пессимистичного отбора: штраф за расхождение голов невозможно
+    посчитать после того, как головы уже сведены в одно число.
+    """
+    n_src, n_tgt = src_observations.shape[0], tgt_z.shape[0]
+    obs = jnp.repeat(src_observations, n_tgt, axis=0)
+    z = jnp.tile(tgt_z, (n_src, 1))
+    b = jnp.tile(tgt_b, (n_src, 1))
+    measures = _forward_measures(network, obs, z, b)  # (E, S*T)
+    return measures.reshape(-1, n_src, n_tgt)
+
+
+@jax.jit
 def _pairwise_min_measures(network, src_observations, tgt_z, tgt_b):
     """M(s_i -> m_j) для всех пар, с min по головам ансамбля.
 
@@ -129,6 +144,10 @@ class TargetSet:
     b: np.ndarray
     z: np.ndarray
     normalizer: np.ndarray
+    #: (E, K) знаменатель по каждой голове ансамбля отдельно. Нужен только
+    #: пессимистичному отбору: там стоимость считается поголовно, и делить на
+    #: общий, уже сведённый знаменатель было бы неверно.
+    normalizer_heads: Optional[np.ndarray] = None
 
     def __len__(self) -> int:
         return self.observations.shape[0]
@@ -170,6 +189,8 @@ class TargetSet:
             b=self.b[idxs],
             z=self.z[idxs],
             normalizer=self.normalizer[idxs],
+            normalizer_heads=(None if self.normalizer_heads is None
+                              else self.normalizer_heads[:, idxs]),
         )
 
     def with_normalizer(self, normalizer: np.ndarray) -> 'TargetSet':
@@ -184,6 +205,19 @@ class FBOracle:
         config: конфиг агента (нужен `latent_dim`).
         ensemble_reduce: 'min' — пессимизм по головам forward-репрезентации,
             'mean' — абляция.
+        disagreement_penalty: коэффициент штрафа за расхождение голов ансамбля.
+            0 — поведение по умолчанию (стоимость = худшая из голов).
+
+            Зачем это нужно. Замер (REPORT 5.10) показал смещение отбора: узел,
+            который выбирает argmin, оценён на 27 шагов ОПТИМИСТИЧНЕЕ истины,
+            тогда как типичный узел — на 39 шагов пессимистичнее. argmin
+            выбирает не ближайший узел, а тот, чья ошибка оказалась самой
+            выгодной. Сведение ансамбля минимумом меры уже даёт пессимизм, но
+            его явно мало: две головы часто ошибаются согласованно.
+
+            Штраф добавляет к стоимости разброс между головами, поэтому узлы, в
+            достижимости которых головы не сходятся, перестают выигрывать отбор
+            за счёт удачного выброса.
         max_pairs: верхняя граница на число пар в одном форвард-проходе;
             ограничивает пиковую память.
     """
@@ -193,6 +227,7 @@ class FBOracle:
         agent: Any,
         config: Optional[dict] = None,
         ensemble_reduce: str = 'min',
+        disagreement_penalty: float = 0.0,
         max_pairs: int = 1 << 16,
         tgt_chunk: int = 128,
     ):
@@ -203,8 +238,12 @@ class FBOracle:
         self.network = agent.network
         self.config = config if config is not None else dict(agent.config)
         self.latent_dim = int(self.config['latent_dim'])
+        # Число голов ансамбля берём из самих весов, а не из конфига: так
+        # исключена рассинхронизация с чекпоинтом.
+        self.num_heads = _count_ensemble_heads(agent)
         self.discount = float(self.config['discount'])
         self.ensemble_reduce = ensemble_reduce
+        self.disagreement_penalty = float(disagreement_penalty)
         self.tgt_chunk = int(tgt_chunk)
         self.src_chunk = max(1, int(max_pairs) // self.tgt_chunk)
 
@@ -231,7 +270,8 @@ class FBOracle:
         return np.concatenate(out, axis=0).reshape(*shape, self.latent_dim)
 
     def make_targets(
-        self, member_observations: np.ndarray, reference_observations: Optional[np.ndarray] = None
+        self, member_observations: np.ndarray, reference_observations: Optional[np.ndarray] = None,
+        per_head: bool = False
     ) -> TargetSet:
         """Готовит узлы из наборов состояний.
 
@@ -257,27 +297,40 @@ class FBOracle:
         references = (
             targets.representatives if reference_observations is None else reference_observations
         )
-        return targets.with_normalizer(self.estimate_normalizer(targets, references))
+        targets = targets.with_normalizer(self.estimate_normalizer(targets, references))
+
+        # Поголовный знаменатель нужен только пессимистичному отбору, а стоит
+        # ещё один проход по опорным состояниям — считаем по требованию.
+        if per_head or self.disagreement_penalty > 0.0:
+            targets = dataclasses.replace(
+                targets,
+                normalizer_heads=self.estimate_normalizer(targets, references, per_head=True),
+            )
+        return targets
 
     def estimate_normalizer(
-        self, targets: TargetSet, reference_observations: np.ndarray
+        self, targets: TargetSet, reference_observations: np.ndarray,
+        per_head: bool = False
     ) -> np.ndarray:
-        """max_s M(s -> узел) по опорным состояниям. -> (K,)
+        """max_s M(s -> узел) по опорным состояниям. -> (K,), либо (E, K)
 
         Теория говорит, что мера максимальна, когда стартуешь в самой цели, то
         есть max_s M(s -> W) — состоятельная оценка знаменателя в (*), и притом
         куда устойчивее одиночной самомеры.
         """
         references = np.asarray(reference_observations, dtype=np.float32)
-        best = np.full(len(targets), -np.inf, dtype=np.float32)
+        shape = (self.num_heads, len(targets)) if per_head else (len(targets),)
+        best = np.full(shape, -np.inf, dtype=np.float32)
 
         for source_chunk in self._iter_chunks(references, self.src_chunk):
-            measures = self._raw_measures(source_chunk.data, targets)[: source_chunk.size]
-            np.maximum(best, measures.max(axis=0), out=best)
+            measures = self._raw_measures(source_chunk.data, targets, per_head)
+            measures = measures[..., : source_chunk.size, :]
+            np.maximum(best, measures.max(axis=-2), out=best)
 
         # Самомеру тоже учитываем: узел достижим как минимум из самого себя.
-        self_measure = self._raw_measures(targets.representatives, targets)
-        return np.maximum(best, np.diag(self_measure))
+        self_measure = self._raw_measures(targets.representatives, targets, per_head)
+        diagonal = np.diagonal(self_measure, axis1=-2, axis2=-1)
+        return np.maximum(best, diagonal)
 
     # ------------------------------------------------------------------ #
     # Достижимость и стоимость
@@ -293,8 +346,33 @@ class FBOracle:
         return np.clip(p, MIN_REACH_PROB, 1.0)
 
     def cost(self, src_observations: np.ndarray, targets: TargetSet) -> np.ndarray:
-        """c(s -> узел) = -log p >= 0. Аддитивна вдоль цепочки подцелей. -> (S, K)"""
-        return -np.log(self.reach_prob(src_observations, targets))
+        """c(s -> узел) = -log p >= 0. Аддитивна вдоль цепочки подцелей. -> (S, K)
+
+        При `disagreement_penalty > 0` возвращается пессимистичная оценка
+        `c_худшая + lambda * (c_худшая - c_лучшая)`: к худшей из голов
+        добавляется их расхождение. См. пояснение в `__init__`.
+        """
+        if self.disagreement_penalty <= 0.0:
+            return -np.log(self.reach_prob(src_observations, targets))
+
+        per_head = self._cost_per_head(src_observations, targets)  # (E, S, K)
+        worst, best = per_head.max(axis=0), per_head.min(axis=0)
+        return worst + self.disagreement_penalty * (worst - best)
+
+    def _cost_per_head(self, src_observations: np.ndarray, targets: TargetSet) -> np.ndarray:
+        """Стоимость по каждой голове ансамбля отдельно. -> (E, S, K)"""
+        if targets.normalizer_heads is None:
+            raise ValueError(
+                'Для пессимистичного отбора нужен поголовный знаменатель. '
+                'Соберите цели через make_targets(..., per_head=True).'
+            )
+        measures = self._raw_measures(
+            np.asarray(src_observations, dtype=np.float32), targets, per_head=True
+        )
+        denom = targets.normalizer_heads[:, None, :]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            p = np.where(denom > 0.0, measures / denom, 0.0)
+        return -np.log(np.clip(p, MIN_REACH_PROB, 1.0))
 
     def cost_from_state(self, observation: np.ndarray, targets: TargetSet) -> np.ndarray:
         """c(s -> узел) из ОДНОГО состояния ко всем узлам. -> (K,)"""
@@ -369,8 +447,9 @@ class FBOracle:
     # Внутреннее
     # ------------------------------------------------------------------ #
 
-    def _raw_measures(self, src_observations: np.ndarray, targets: TargetSet) -> np.ndarray:
-        """M(s -> узел) = агрегация по членам набора. -> (S, K)
+    def _raw_measures(self, src_observations: np.ndarray, targets: TargetSet,
+                      per_head: bool = False) -> np.ndarray:
+        """M(s -> узел) = агрегация по членам набора. -> (S, K), либо (E, S, K)
 
         Агрегация — максимум по членам (то же самое, что минимум стоимости):
         попасть в любого члена набора значит оказаться в нужной локации.
@@ -385,7 +464,9 @@ class FBOracle:
         nodes_per_chunk = max(1, self.tgt_chunk // width)
         flat_z, flat_b = targets.flat_z, targets.flat_b
 
-        out = np.empty((n_src, n_nodes), dtype=np.float32)
+        n_heads = self.num_heads if per_head else 1
+        out = np.empty((n_heads, n_src, n_nodes) if per_head else (n_src, n_nodes),
+                       dtype=np.float32)
         for node_chunk in self._iter_chunks(np.arange(n_nodes), nodes_per_chunk):
             j0, j1 = node_chunk.start, node_chunk.start + node_chunk.size
             columns = slice(j0 * width, j1 * width)
@@ -393,14 +474,19 @@ class FBOracle:
             b_block = _pad_to(flat_b[columns], nodes_per_chunk * width)
 
             for source_chunk in self._iter_chunks(src_observations, self.src_chunk, pad=False):
+                kernel = _pairwise_measures_per_head if per_head else _pairwise_min_measures
                 measures = np.asarray(
-                    _pairwise_min_measures(self.network, source_chunk.data, z_block, b_block)
-                )[:, : node_chunk.size * width]
+                    kernel(self.network, source_chunk.data, z_block, b_block)
+                )[..., : node_chunk.size * width]
+
+                # Агрегация по членам делается ПОГОЛОВНО: смешивать головы до
+                # неё значило бы сравнивать разные оценки одного и того же узла.
+                aggregated = measures.reshape(
+                    *measures.shape[:-1], node_chunk.size, width
+                ).max(axis=-1)
 
                 i0 = source_chunk.start
-                out[i0 : i0 + source_chunk.size, j0:j1] = measures.reshape(
-                    source_chunk.size, node_chunk.size, width
-                ).max(axis=2)
+                out[..., i0 : i0 + source_chunk.size, j0:j1] = aggregated
 
         return out
 
@@ -435,3 +521,26 @@ def _pad_to(arr: np.ndarray, size: int) -> np.ndarray:
         return arr
     pad = np.repeat(arr[-1:], size - len(arr), axis=0)
     return np.concatenate([arr, pad], axis=0)
+
+
+def _count_ensemble_heads(agent) -> int:
+    """Число голов forward-репрезентации по форме её весов.
+
+    У ансамблевых модулей flax добавляет ведущую ось к каждому тензору, поэтому
+    достаточно посмотреть на любой из них: у обычного слоя ядро двумерно, у
+    ансамбля из E голов — трёхмерно с E впереди.
+    """
+    params = agent.network.params['modules_forward_repr']
+
+    def first_kernel(tree):
+        for key, value in tree.items():
+            if isinstance(value, dict):
+                found = first_kernel(value)
+                if found is not None:
+                    return found
+            elif key == 'kernel':
+                return np.asarray(value)
+        return None
+
+    kernel = first_kernel(params)
+    return int(kernel.shape[0]) if kernel is not None and kernel.ndim == 3 else 1

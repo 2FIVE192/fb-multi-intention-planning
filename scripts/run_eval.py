@@ -54,6 +54,9 @@ def parse_args():
     g.add_argument('--max_edge_steps', type=float, default=75.0,
                    help='максимальная длина ребра в шагах среды: FB надёжен только на коротких переходах')
     g.add_argument('--ensemble_reduce', default='min', choices=('min', 'mean'))
+    g.add_argument('--disagreement_penalty', type=float, default=0.0,
+                   help='штраф за расхождение голов ансамбля; проверен и не помог, '
+                        'см. REPORT 5.11')
     g.add_argument('--node_seed', type=int, default=0,
                    help='-1 — свой граф на каждый сид прогона (проверка устойчивости к отбору узлов)')
 
@@ -96,6 +99,7 @@ def build_controller(name, exp, args, run_seed):
             k_neighbors=args.k_neighbors,
             max_edge_steps=args.max_edge_steps,
             ensemble_reduce=args.ensemble_reduce,
+            disagreement_penalty=args.disagreement_penalty,
             node_seed=node_seed,
             num_members=args.num_members,
             member_stride=args.member_stride,
@@ -132,6 +136,7 @@ def main():
         args.checkpoint_dir,
         args.env_name,
         ensemble_reduce=args.ensemble_reduce,
+        disagreement_penalty=args.disagreement_penalty,
         seed=seeds[0],
     )
     tasks = exp.tasks()

@@ -35,6 +35,9 @@ class GraphSpec:
     k_neighbors: int = 16
     max_edge_steps: float = 75.0
     ensemble_reduce: str = 'min'
+    #: Штраф за расхождение голов ансамбля. Входит в ключ кэша: он меняет
+    #: матрицу стоимостей, и переиспользовать граф от другого значения нельзя.
+    disagreement_penalty: float = 0.0
     node_seed: int = 0
     candidate_pool: int = 20_000
     #: Сколько состояний в наборе одного узла и шаг между ними. Замер по
@@ -71,6 +74,7 @@ class Experiment:
         checkpoint_dir: str,
         env_name: str,
         ensemble_reduce: str = 'min',
+        disagreement_penalty: float = 0.0,
         seed: int = 0,
     ):
         print(f'[exp] среда {env_name}')
@@ -88,7 +92,8 @@ class Experiment:
         self.agent, self.config = load_agent(checkpoint_dir, example_batch, seed=seed)
         self.checkpoint_dir = checkpoint_dir
 
-        self.oracle = FBOracle(self.agent, self.config, ensemble_reduce=ensemble_reduce)
+        self.oracle = FBOracle(self.agent, self.config, ensemble_reduce=ensemble_reduce,
+                               disagreement_penalty=disagreement_penalty)
 
         self._tasks: Optional[List[TaskSpec]] = None
 
@@ -203,6 +208,7 @@ class Experiment:
             'latent_dim': self.oracle.latent_dim,
             'discount': self.oracle.discount,
             'ensemble_reduce': self.oracle.ensemble_reduce,
+            'disagreement_penalty': self.oracle.disagreement_penalty,
             'train_size': int(self.train_dataset.size),
             'obs_dim': int(self.train_dataset['observations'].shape[-1]),
         }

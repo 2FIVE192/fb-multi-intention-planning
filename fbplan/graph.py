@@ -81,7 +81,8 @@ def build_subgoal_graph(
         reference_observations: опорные состояния для оценки знаменателя
             max_s M(s -> узел). См. `TargetSet`.
     """
-    targets = oracle.make_targets(member_observations, reference_observations)
+    targets = oracle.make_targets(member_observations, reference_observations,
+                                  per_head=oracle.disagreement_penalty > 0.0)
     if dataset_idxs is None:
         dataset_idxs = np.arange(len(targets))
 
@@ -238,7 +239,8 @@ def solve_goal(
     # состояния. Знаменатель оцениваем по представителям узлов графа — они
     # покрывают лабиринт.
     goal_targets = oracle.make_targets(
-        goal_observations[None], graph.targets.representatives
+        goal_observations[None], graph.targets.representatives,
+        per_head=oracle.disagreement_penalty > 0.0,
     )
 
     if goal_targets.normalizer[0] <= 0.0:
