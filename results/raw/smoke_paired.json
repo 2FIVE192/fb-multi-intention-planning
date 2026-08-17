@@ -1,0 +1,11 @@
+{
+  "method_a": "graph",
+  "method_b": "baseline",
+  "delta": -0.04,
+  "ci_low": NaN,
+  "ci_high": NaN,
+  "num_pairs": 25,
+  "frac_disagree": 0.28,
+  "wins_a": 3,
+  "wins_b": 4
+}

@@ -168,36 +168,74 @@ pip install gdown && python -m gdown --folder https://drive.google.com/drive/fol
 
 ## Запуск
 
-Ниже — ровно те команды, которыми получены числа из отчёта. Первый прогон
-строит граф (~10 минут на CPU) и кладёт его в `results/graph_cache/`; повторные
-запуски его переиспользуют.
+### Быстрая проверка, что всё работает (3–4 минуты на CPU)
 
-**Итоговое сравнение** (раздел 5.8 отчёта; ~30 минут на CPU):
+Уменьшенный граф, один сид, 5 эпизодов на задачу. Числа отчёта эта команда **не
+воспроизводит** и не должна — она нужна только чтобы убедиться, что окружение,
+чекпоинт и пайплайн живы. Замерено локально: 3 м 26 с, из них 13 с на граф.
+Ожидаемый вид результата — оба метода около 0.8 на 25 эпизодах, без выводов:
+доверительных интервалов на одном сиде нет, и разница здесь ничего не значит.
+
+```bash
+python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods baseline,graph --seeds 0 --num_episodes 5 --num_nodes 150 --num_members 4 --member_stride 16 --normalizer_references 500 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate direct --plan_advantage_steps 25 --tag smoke
+```
+
+### Главный результат (раздел 5.8 отчёта, ~30 минут на CPU)
+
+Ровно эта команда породила `results/raw/holdout_*.csv`, на которые ссылается
+отчёт. Первый запуск строит граф и кладёт его в `results/graph_cache/`.
 
 ```bash
 python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods baseline,graph --seeds 1,2,3 --num_episodes 20 --num_nodes 300 --num_members 8 --member_stride 8 --normalizer_references 1000 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate direct --plan_advantage_steps 25 --tag holdout
 ```
 
-**Ключевая абляция — глубина плана** (раздел 5.6). Отличается одним флагом
-`--tail_estimate`: `dijkstra` даёт 0.47, `direct` — 0.69.
+### Ключевая абляция — глубина плана (раздел 5.6)
+
+Две команды отличаются одним флагом `--tail_estimate`, и разница между ними —
+главный вывод работы: `dijkstra` даёт 0.47, `direct` — 0.69.
 
 ```bash
 python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph --seeds 0 --num_episodes 20 --num_nodes 300 --num_members 8 --member_stride 8 --normalizer_references 1000 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate dijkstra --tag tail_dijkstra
 ```
 
-**Трассировка одного эпизода** — что планировщик выбирает и почему; именно она
-вскрыла оба дефекта представления:
+### Диагностика и тесты
 
 ```bash
+python tests/test_planning.py        # логика планирования, чекпоинт не нужен
+python tests/test_notebooks.py       # синтаксис ячеек ноутбуков
 python scripts/trace_episode.py --checkpoint_dir checkpoints/medium --task_id 1
+python scripts/diagnose_env.py       # если среда не создаётся
 ```
 
-**Тесты** — логика планирования и синтаксис ячеек ноутбуков (чекпоинт не нужен, секунды):
+`trace_episode.py` печатает по шагам, какую подцель выбрал планировщик и
+насколько она далека на самом деле — именно он вскрыл оба дефекта представления.
+
+## Чем подкреплены числа
+
+| источник | что в нём | воспроизводится командой |
+|---|---|---|
+| `results/raw/holdout_*.csv` | итог на отложенных сидах, CPU | да, см. выше |
+| `results/raw/commit_{dijkstra,direct}_*.csv` | абляция глубины плана, CPU | да |
+| `results/raw/adv{25,60}_*.csv` | подбор запаса доверия, CPU | да |
+| `results/colab_gpu_summary.csv` | прогон на GPU (разделы 5.9) | **нет**, см. ниже |
+
+Прогон на GPU (Colab, T4, ~3.5 часа) отработал, но сырые csv остались в
+рантайме и пропали, когда кончилась квота. Уцелел выполненный ноутбук
+`notebooks/colab_reproduce_runned.ipynb` со всем выводом. Чтобы числа из
+раздела 5.9 не были вписаны руками, они извлекаются из него скриптом и
+сверяемы построчно:
 
 ```bash
-python tests/test_planning.py
-python tests/test_notebooks.py
+python scripts/extract_notebook_results.py
 ```
+
+### Почему ваши числа не совпадут с отчётом в точности
+
+Одна и та же конфигурация (300 узлов, 8 членов, сиды 1–3) дала на CPU парную
+разность −0.067, а на GPU −0.020. Успех обоих методов при этом сдвинулся на
+0.02–0.03. Причина — арифметика backend'а JAX, а через неё сэмплирование политик
+и отбор узлов. Вывод от этого не меняется (планировщик не выигрывает ни там, ни
+там), но ожидать побитового совпадения не стоит, и в отчёте это оговорено.
 
 Скрипты `analysis_composability.py` и `analysis_value_maps.py` строят графики
 для E1/E2/E5; в отчёт они не вошли, потому что выводы получены числами, а

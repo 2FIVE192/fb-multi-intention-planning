@@ -1,0 +1,6 @@
+tag,method,success,ci_low,ci_high,num_seeds,paired_delta,paired_ci_low,paired_ci_high,num_pairs
+gpu_small,baseline,0.777,0.73,0.82,3,,,,
+gpu_small,graph,0.757,0.7,0.82,3,-0.02,-0.08,0.09,300.0
+gpu_full,baseline,0.793,0.78,0.8,3,,,,
+gpu_full,graph,0.7,0.68,0.72,3,-0.093,-0.1,-0.08,300.0
+gpu_tail_dijkstra,graph,0.43,0.42,0.44,3,,,,
