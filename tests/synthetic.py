@@ -108,6 +108,11 @@ class SyntheticOracle:
         self.maze = maze
         self.discount = discount
         self.honest_radius = honest_radius
+        # Атрибуты настоящего оракула, на которые смотрит код построения графа.
+        # Пессимистичный отбор в синтетике моделировать нечем: ансамбля нет,
+        # оракул возвращает одно детерминированное число.
+        self.disagreement_penalty = 0.0
+        self.num_heads = 1
         self._geodesics = maze.all_geodesics()
 
     # -- интерфейс, которым пользуются graph.py и planner.py ------------- #
@@ -119,21 +124,27 @@ class SyntheticOracle:
     def backward(self, observations: np.ndarray) -> np.ndarray:
         return np.asarray(observations, dtype=np.float32)
 
-    def make_targets(self, member_observations: np.ndarray, reference_observations=None) -> TargetSet:
+    def make_targets(self, member_observations: np.ndarray, reference_observations=None,
+                     per_head: bool = False) -> TargetSet:
         """Узел — набор состояний, как в настоящем оракуле.
 
         В синтетике клетка лабиринта полностью задаёт состояние, поэтому набор
         вырождается в одного члена: моделировать шум позы здесь нечем и незачем,
         тесты проверяют логику планирования, а не качество представлений.
+
+        `per_head` принимается ради совместимости сигнатуры: ансамбля здесь нет,
+        и знаменатель у единственной «головы» тот же самый.
         """
         members = np.asarray(member_observations, dtype=np.float32)
         if members.ndim == 2:
             members = members[:, None, :]  # (K, 1, dim)
+        ones = np.ones(len(members), dtype=np.float32)
         return TargetSet(
             observations=members,
             b=members.copy(),
             z=members.copy(),
-            normalizer=np.ones(len(members), dtype=np.float32),
+            normalizer=ones,
+            normalizer_heads=ones[None] if per_head else None,
         )
 
     def cost(self, src_observations: np.ndarray, targets: TargetSet) -> np.ndarray:
