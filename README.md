@@ -18,6 +18,8 @@ High-level механизм, который рассуждает не об од�
 
 Парная разность −0.067, CI [−0.080, −0.050] — проигрыш значимый.
 
+![Абляция глубины плана](results/figures/ablation_plan_depth.png)
+
 Содержательный результат — в том, что измерено **почему**. Ключевая абляция: при
 прочих равных заменить цепочку рёбер по Дейкстре на один запрос FB до цели, и
 успех растёт с 0.47 до 0.69. Вклад многошаговой композиции **отрицателен**,
@@ -233,6 +235,20 @@ python tests/test_planning.py        # логика планирования, ч
 python tests/test_notebooks.py       # синтаксис ячеек ноутбуков
 python scripts/trace_episode.py --checkpoint_dir checkpoints/medium --task_id 1
 python scripts/diagnose_env.py       # если среда не создаётся
+```
+
+Графики отчёта строятся из закоммиченных csv, GPU и чекпоинт не нужны:
+
+```bash
+python scripts/make_figures.py
+```
+
+Замер смещения отбора (раздел 5.10) требует чекпоинта и занимает несколько
+минут; он же порождает `results/raw/selection_bias.csv`, из которого строится
+второй график:
+
+```bash
+python scripts/analysis_selection_bias.py --checkpoint_dir checkpoints/medium
 ```
 
 `trace_episode.py` печатает по шагам, какую подцель выбрал планировщик и

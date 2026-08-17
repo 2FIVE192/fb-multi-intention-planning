@@ -1,9 +1,16 @@
-"""Графики для отчёта из сырых csv в results/raw.
+"""Два графика для отчёта: главный результат и объясняющий его механизм.
 
-Ни одно число в отчёте не вписывается руками: всё, что попадает в REPORT.md,
-порождается этим скриптом из файлов, сохранённых прогонами.
+Оба строятся из уже закоммиченных данных, GPU и чекпоинт не нужны.
 
-Запуск (после run_eval.py / analysis_composability.py / run_ablations.py):
+1. Абляция глубины плана. Единственное различие между ветками — чем оценивается
+   хвост маршрута до цели: цепочкой рёбер по Дейкстре или одним запросом FB.
+   Показано на двух конфигурациях сразу, чтобы видеть, что вывод не держится на
+   одной точке.
+
+2. Смещение отбора. Ошибка оценки у типичного узла против ошибки у того узла,
+   который выбирает argmin. Объясняет, почему композиция проигрывает.
+
+Запуск:
     python scripts/make_figures.py
 """
 
@@ -20,181 +27,157 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from fbplan.stats import bootstrap_ci, paired_comparison, summarize_by_task
-
-METHOD_LABELS = {'baseline': 'бейзлайн (одна интенция)', 'graph': 'планировщик (наш)',
-                 'flat': 'без иерархии'}
-METHOD_COLORS = {'baseline': 'tab:orange', 'graph': 'tab:blue', 'flat': '0.6'}
+# Единая палитра: тёплый — композиция (то, что проверялось), холодный — её
+# отсутствие, серый — бейзлайн как точка отсчёта.
+COLOR_DIJKSTRA = '#c1442e'
+COLOR_DIRECT = '#2c6e9b'
+COLOR_BASELINE = '#8a8a8a'
+COLOR_BIAS = '#c1442e'
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--raw_dir', default='results/raw')
+    p.add_argument('--gpu_summary', default='results/colab_gpu_summary.csv')
     p.add_argument('--output_dir', default='results/figures')
-    p.add_argument('--main_tag', default='main')
-    p.add_argument('--composability_tag', default='composability')
-    p.add_argument('--ablations_tag', default='ablations')
     return p.parse_args()
+
+
+def success_of(raw_dir: str, tag: str, method: str = None) -> float:
+    """Средний успех прогона из поэпизодного csv."""
+    df = pd.read_csv(os.path.join(raw_dir, f'{tag}_episodes.csv'))
+    if method is not None:
+        df = df[df.method == method]
+    return float(df.success.mean())
+
+
+def figure_ablation(args) -> str:
+    """Главный результат: композиция по Дейкстре проигрывает плану из одной подцели."""
+    gpu = pd.read_csv(args.gpu_summary).set_index(['tag', 'method'])
+
+    # Две конфигурации: слабые рёбра на CPU и лучшие доступные на GPU.
+    groups = [
+        {
+            'name': 'CPU\n300 узлов, 8 членов\n1 сид, 100 эпизодов',
+            'dijkstra': (success_of(args.raw_dir, 'commit_dijkstra'), None, None),
+            'direct': (success_of(args.raw_dir, 'commit_direct'), None, None),
+            # Бейзлайн того же сида и того же числа эпизодов, что и обе ветки.
+            'baseline': success_of(args.raw_dir, 'baseline_check', method='baseline'),
+        },
+        {
+            'name': 'GPU\n1000 узлов, 32 члена\n3 сида, 300 эпизодов',
+            'dijkstra': (gpu.loc[('gpu_tail_dijkstra', 'graph'), 'success'],
+                         gpu.loc[('gpu_tail_dijkstra', 'graph'), 'ci_low'],
+                         gpu.loc[('gpu_tail_dijkstra', 'graph'), 'ci_high']),
+            'direct': (gpu.loc[('gpu_tail_direct', 'graph'), 'success'],
+                       gpu.loc[('gpu_tail_direct', 'graph'), 'ci_low'],
+                       gpu.loc[('gpu_tail_direct', 'graph'), 'ci_high']),
+            'baseline': float(gpu.loc[('gpu_full', 'baseline'), 'success']),
+        },
+    ]
+
+    fig, ax = plt.subplots(figsize=(9, 4.6), constrained_layout=True)
+    positions = np.arange(len(groups))
+    height = 0.34
+
+    for offset, key, color, label in (
+        (+height / 2, 'dijkstra', COLOR_DIJKSTRA, 'хвост по Дейкстре (много подцелей)'),
+        (-height / 2, 'direct', COLOR_DIRECT, 'хвост одним запросом (одна подцель)'),
+    ):
+        values = [g[key][0] for g in groups]
+        # Ошибки задаются как расстояния от точки до концов интервала.
+        errors = np.array([
+            [v - (g[key][1] if g[key][1] is not None else v),
+             (g[key][2] if g[key][2] is not None else v) - v]
+            for g, v in zip(groups, values)
+        ]).T
+
+        bars = ax.barh(positions + offset, values, height=height, color=color, label=label,
+                       xerr=errors, error_kw=dict(ecolor='0.25', capsize=3, lw=1.2))
+        # Подпись ставится ЗА правым усом, иначе налезает на него.
+        for bar, value, right in zip(bars, values, errors[1]):
+            ax.text(value + right + 0.018, bar.get_y() + bar.get_height() / 2, f'{value:.3f}',
+                    va='center', fontsize=10, color=color, fontweight='bold')
+
+    for position, group in zip(positions, groups):
+        ax.plot([group['baseline']] * 2, [position - 0.45, position + 0.45],
+                color=COLOR_BASELINE, ls='--', lw=1.8, zorder=3)
+        ax.text(group['baseline'], position + 0.47, f'бейзлайн {group["baseline"]:.3f}',
+                color='0.35', fontsize=9, va='bottom', ha='center')
+
+    ax.set_yticks(positions)
+    ax.set_yticklabels([g['name'] for g in groups], fontsize=9)
+    ax.set_xlabel('доля успешных эпизодов')
+    ax.set_xlim(0, 1.02)
+    ax.set_ylim(-0.62, len(groups) - 0.38)
+    ax.set_title('Вклад многошаговой композиции отрицателен\n'
+                 'ветки различаются ровно одним: чем оценивается хвост маршрута до цели',
+                 fontsize=11)
+    # Легенда под осями: внутри поля она перекрывала столбцы.
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.16), ncol=2, fontsize=9,
+              frameon=False)
+    ax.grid(axis='x', alpha=0.25)
+    ax.set_axisbelow(True)
+
+    path = os.path.join(args.output_dir, 'ablation_plan_depth.png')
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def figure_selection_bias(args) -> str:
+    """Механизм: argmin выбирает узел с самой оптимистичной ошибкой."""
+    df = pd.read_csv(os.path.join(args.raw_dir, 'selection_bias.csv'))
+
+    fig, ax = plt.subplots(figsize=(9, 4.6), constrained_layout=True)
+    x = np.arange(len(df))
+
+    # Вертикальный разрыв между двумя кривыми и есть смещение отбора.
+    ax.vlines(x, df.error_selected_node, df.error_average_node,
+              color=COLOR_BIAS, alpha=0.28, lw=7, zorder=1)
+    for xi, low, high, bias in zip(x, df.error_selected_node, df.error_average_node,
+                                   df.selection_bias):
+        # Последнюю подпись уводим влево, иначе она вылезает за поле.
+        last = xi == x[-1]
+        ax.text(xi + (-0.11 if last else 0.11), (low + high) / 2, f'{abs(bias):.0f} шагов',
+                fontsize=9, color=COLOR_BIAS, va='center',
+                ha='right' if last else 'left')
+
+    ax.plot(x, df.error_average_node, 'o-', color=COLOR_BASELINE, lw=2, ms=7,
+            label='ошибка у типичного узла', zorder=2)
+    ax.plot(x, df.error_selected_node, 'o-', color=COLOR_DIRECT, lw=2, ms=7,
+            label='ошибка у узла, выбранного argmin', zorder=2)
+    ax.axhline(0, color='0.3', lw=1)
+    # Всё, что ниже нуля, — оптимистичная ошибка: именно она и вредна.
+    ax.axhspan(ax.get_ylim()[0], 0, color=COLOR_DIRECT, alpha=0.05, zorder=0)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(df.num_members)
+    ax.set_xlabel('состояний в наборе узла')
+    ax.set_ylabel('оценка минус истина, шагов среды')
+    ax.set_title('Смещение отбора: argmin выбирает узел с самой оптимистичной ошибкой\n'
+                 'выше нуля — FB считает узел дальше, чем он есть; ниже — ближе',
+                 fontsize=11)
+    ax.legend(loc='upper right', fontsize=9, framealpha=0.95)
+    ax.grid(alpha=0.25)
+    ax.set_axisbelow(True)
+
+    path = os.path.join(args.output_dir, 'selection_bias.png')
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
 
 
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    made = []
-    made += _figure_main(args)
-    made += _figure_composability(args)
-    made += _figure_ablations(args)
-
-    if not made:
-        print('Не найдено ни одного csv — сначала запустите прогоны (см. README).')
-    for path in made:
-        print(f'[fig] {path}')
-
-
-# --------------------------------------------------------------------------- #
-
-
-def _load(args, tag, suffix):
-    path = os.path.join(args.raw_dir, f'{tag}_{suffix}.csv')
-    return pd.read_csv(path) if os.path.exists(path) else None
-
-
-def _figure_main(args):
-    """E3: успех по задачам и парная разность с бейзлайном."""
-    df = _load(args, args.main_tag, 'episodes')
-    if df is None:
-        return []
-
-    by_task = summarize_by_task(df)
-    methods = [m for m in ('baseline', 'graph', 'flat') if m in set(df['method'])]
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), constrained_layout=True)
-
-    # Слева: успех по задачам.
-    task_ids = sorted(by_task['task_id'].unique())
-    width = 0.8 / len(methods)
-    for k, method in enumerate(methods):
-        sub = by_task[by_task['method'] == method].set_index('task_id').reindex(task_ids)
-        offset = (k - (len(methods) - 1) / 2) * width
-        axes[0].bar(np.arange(len(task_ids)) + offset, sub['success'], width,
-                    yerr=sub['std_over_seeds'], capsize=3,
-                    label=METHOD_LABELS.get(method, method),
-                    color=METHOD_COLORS.get(method))
-    axes[0].set_xticks(np.arange(len(task_ids)), [f'задача {t}' for t in task_ids])
-    axes[0].set_ylabel('success rate')
-    axes[0].set_ylim(0, 1.05)
-    axes[0].set_title('Успех по задачам (усы — std по сидам)', fontsize=10)
-    axes[0].legend(fontsize=8)
-
-    # Справа: парная разность по задачам с бутстрэп-CI.
-    if 'graph' in methods and 'baseline' in methods:
-        deltas, los, his = [], [], []
-        for task_id in task_ids:
-            sub = df[df['task_id'] == task_id]
-            cmp = paired_comparison(sub, 'graph', 'baseline')
-            deltas.append(cmp['delta'])
-            los.append(cmp['delta'] - cmp['ci_low'])
-            his.append(cmp['ci_high'] - cmp['delta'])
-
-        colors = ['tab:blue' if d >= 0 else 'crimson' for d in deltas]
-        axes[1].bar(np.arange(len(task_ids)), deltas, 0.6,
-                    yerr=[los, his], capsize=4, color=colors)
-        axes[1].axhline(0, color='black', linewidth=0.8)
-        axes[1].set_xticks(np.arange(len(task_ids)), [f'задача {t}' for t in task_ids])
-        axes[1].set_ylabel('успех: планировщик − бейзлайн')
-        axes[1].set_title('Парная разность, 95% бутстрэп-CI по сидам', fontsize=10)
-
-    path = os.path.join(args.output_dir, 'main_results.png')
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return [path]
-
-
-def _figure_composability(args):
-    """E1: обе оценки против истинной геодезической дальности."""
-    df = _load(args, args.composability_tag, 'pairs')
-    if df is None:
-        return []
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), constrained_layout=True)
-    finite = df[np.isfinite(df['path_cost'])]
-
-    # Слева: облака точек.
-    axes[0].scatter(df['true_geodesic'], df['direct_steps'], s=3, alpha=0.2,
-                    color='tab:orange', label='прямая оценка (как у бейзлайна)')
-    axes[0].scatter(finite['true_geodesic'], finite['path_steps'], s=3, alpha=0.2,
-                    color='tab:blue', label='композиция по графу (наш метод)')
-
-    # Идеал: оценка растёт пропорционально истинной дальности. Наклон берём из
-    # ближней зоны, где FB заведомо надёжен, и продлеваем.
-    near = df[df['true_geodesic'] <= 8]
-    if len(near) > 10 and near['true_geodesic'].sum() > 0:
-        slope = float(np.sum(near['direct_steps'] * near['true_geodesic'])
-                      / np.sum(near['true_geodesic'] ** 2))
-        xs = np.linspace(0, df['true_geodesic'].max(), 50)
-        axes[0].plot(xs, slope * xs, 'k--', linewidth=1,
-                     label='экстраполяция ближней зоны')
-
-    axes[0].set_xlabel('истинное геодезическое расстояние, мировых единиц')
-    axes[0].set_ylabel('оценка расстояния, шагов среды')
-    axes[0].set_title('Оценка против истины', fontsize=10)
-    axes[0].legend(fontsize=8, markerscale=3)
-
-    # Справа: среднее по бинам — видно плато прямой оценки.
-    bins = np.arange(0, df['true_geodesic'].max() + 4, 4)
-    centers = (bins[:-1] + bins[1:]) / 2
-    for column, color, label in (
-        ('direct_steps', 'tab:orange', 'прямая оценка'),
-        ('path_steps', 'tab:blue', 'композиция по графу'),
-    ):
-        source = df if column == 'direct_steps' else finite
-        grouped = source.groupby(pd.cut(source['true_geodesic'], bins),
-                                 observed=True)[column]
-        axes[1].errorbar(centers[: len(grouped.mean())], grouped.mean(),
-                         yerr=grouped.std(), color=color, marker='o',
-                         capsize=3, label=label)
-    axes[1].set_xlabel('истинное геодезическое расстояние, мировых единиц')
-    axes[1].set_ylabel('оценка расстояния, шагов среды')
-    axes[1].set_title('Среднее по бинам: где теряется контраст', fontsize=10)
-    axes[1].legend(fontsize=8)
-
-    path = os.path.join(args.output_dir, 'composability.png')
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return [path]
-
-
-def _figure_ablations(args):
-    """E4: чувствительность к гиперпараметрам."""
-    df = _load(args, args.ablations_tag, 'episodes')
-    if df is None:
-        return []
-
-    per_seed = df.groupby(['variant', 'run_seed'])['success'].mean().reset_index()
-    stats = []
-    for variant, group in per_seed.groupby('variant'):
-        lo, hi = bootstrap_ci(group['success'].values)
-        stats.append({'variant': variant, 'success': group['success'].mean(),
-                      'lo': lo, 'hi': hi})
-    stats = pd.DataFrame(stats).sort_values('success')
-
-    fig, ax = plt.subplots(figsize=(8, 0.42 * len(stats) + 2), constrained_layout=True)
-    ypos = np.arange(len(stats))
-    colors = ['tab:blue' if v == 'default' else 'tab:orange' if v == 'baseline' else '0.55'
-              for v in stats['variant']]
-    ax.barh(ypos, stats['success'],
-            xerr=[stats['success'] - stats['lo'], stats['hi'] - stats['success']],
-            capsize=3, color=colors)
-    ax.set_yticks(ypos, stats['variant'])
-    ax.set_xlabel('success rate (95% бутстрэп-CI по сидам)')
-    ax.set_title('Абляции: отклонение по одной оси от дефолта', fontsize=10)
-
-    path = os.path.join(args.output_dir, 'ablations.png')
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return [path]
+    for build in (figure_ablation, figure_selection_bias):
+        try:
+            print(f'[figures] {build(args)}')
+        except FileNotFoundError as exc:
+            print(f'[figures] пропущен {build.__name__}: нет данных ({exc.filename})')
 
 
 if __name__ == '__main__':
