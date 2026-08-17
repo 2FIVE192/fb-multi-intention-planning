@@ -214,6 +214,13 @@ python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph -
 python scripts/run_eval.py --checkpoint_dir checkpoints/medium --methods graph --seeds 1,2,3 --num_episodes 20 --replan_every 20 --execution high --min_commit_steps 40 --tail_estimate direct --num_nodes 1000 --num_members 32 --member_stride 2 --normalizer_references 4000 --tgt_chunk 2048 --tag gpu_tail_direct
 ```
 
+В Colab для этого есть отдельный маленький ноутбук
+[`notebooks/colab_finish_ablation.ipynb`](notebooks/colab_finish_ablation.ipynb):
+настройка плюс один этот прогон, ничего уже посчитанного он не пересчитывает.
+Основной `colab_reproduce.ipynb` для этого не годится — его ячейки заново
+считают все четыре ветки, а `colab_reproduce_runned.ipynb` перезапускать нельзя
+вовсе: это артефакт прогона, которым подкреплены числа раздела 5.9.
+
 Флаг `--tgt_chunk 2048` здесь не косметика. При наборах по 32 члена блок по
 умолчанию вмещает `128/32 = 4` узла, то есть один онлайн-запрос дробится на 250
 запусков ядра. Укрупнение блока ускорило запрос втрое на замере (193 → 68 мс), а
