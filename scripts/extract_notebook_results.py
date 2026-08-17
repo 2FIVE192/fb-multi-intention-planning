@@ -13,6 +13,7 @@
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -37,7 +38,8 @@ PAIRED_RE = re.compile(
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--notebook', default='notebooks/colab_reproduce_runned.ipynb')
+    p.add_argument('--notebooks', default='notebooks/*_runned.ipynb',
+                   help='glob по выполненным ноутбукам')
     p.add_argument('--output', default='results/colab_gpu_summary.csv')
     return p.parse_args()
 
@@ -80,10 +82,15 @@ def parse_runs(text: str):
 
 def main():
     args = parse_args()
-    if not os.path.exists(args.notebook):
-        raise SystemExit(f'нет ноутбука {args.notebook}')
+    notebooks = sorted(glob.glob(args.notebooks))
+    if not notebooks:
+        raise SystemExit(f'не нашлось ноутбуков по маске {args.notebooks}')
 
-    rows = [row for text in cell_outputs(args.notebook) for row in parse_runs(text)]
+    rows = []
+    for notebook in notebooks:
+        found = [row for text in cell_outputs(notebook) for row in parse_runs(text)]
+        print(f'{os.path.basename(notebook)}: прогонов {len({r["tag"] for r in found})}')
+        rows.extend(found)
     if not rows:
         raise SystemExit('в выводе ноутбука не нашлось ни одной сводки прогона')
 
