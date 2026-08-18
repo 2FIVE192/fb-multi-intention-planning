@@ -23,7 +23,7 @@ from fbplan.experiment import Experiment, GraphSpec
 from fbplan.graph import DIRECT_TO_GOAL, extract_path, solve_goal
 from fbplan.maze_analysis import all_geodesic_fields, geodesic_distances, maze_geometry
 from fbplan.planner import GraphPlanner, PlannerConfig
-from fbplan.rollout import episode_seed
+from fbplan.rollout import episode_seed, reset_episode
 
 
 def parse_args():
@@ -97,9 +97,10 @@ def _report_plan(exp, graph, plan, node_xy, goal_xy, grid, unit, fields):
 
 def _trace(args, exp, planner, task, node_xy, goal_xy, grid, unit, fields):
     planner.reset(task)
-    observation, _ = exp.env.reset(
-        seed=episode_seed(args.run_seed, task.task_id, args.episode),
-        options=dict(task_id=task.task_id, render_goal=False),
+    # Через reset_episode, а не напрямую: иначе старт эпизода невоспроизводим —
+    # OGBench берёт часть случайности мимо аргумента seed (см. rollout.py).
+    observation, _ = reset_episode(
+        exp.env, episode_seed(args.run_seed, task.task_id, args.episode), task.task_id
     )
 
     rng = jax.random.PRNGKey(args.run_seed)
