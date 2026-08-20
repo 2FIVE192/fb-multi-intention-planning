@@ -110,7 +110,7 @@ def crosses_wall(
     xy_to = np.atleast_2d(np.asarray(xy_to, dtype=np.float64))
 
     ts = np.linspace(0.0, 1.0, samples)[None, :, None]
-    points = xy_from[:, None, :] * (1 - ts) + xy_to[:, None, :] * ts  # (N, samples, 2)
+    points = xy_from[:, None, :] * (1 - ts) + xy_to[:, None, :] * ts  # точки вдоль отрезка: (N, samples, 2)
 
     flat_ij = xy_to_ij(points.reshape(-1, 2), unit)
     inside = (

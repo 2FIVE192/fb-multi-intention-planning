@@ -137,7 +137,7 @@ class SyntheticOracle:
         """
         members = np.asarray(member_observations, dtype=np.float32)
         if members.ndim == 2:
-            members = members[:, None, :]  # (K, 1, dim)
+            members = members[:, None, :]  # один член на узел: (K, 1, dim)
         ones = np.ones(len(members), dtype=np.float32)
         return TargetSet(
             observations=members,
